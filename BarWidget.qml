@@ -255,10 +255,23 @@ Panel {
     if (!root.cursorActive) {
       root.cursorActive = true
       if (root.selectedIndex < 0 || root.selectedIndex > count) root.selectedIndex = count > 0 ? 1 : 0
+      root.scrollCursorIntoView()
       return
     }
     var delta = dx !== 0 ? dx : dy
     root.selectedIndex = Math.max(0, Math.min(count, root.selectedIndex + delta))
+    root.scrollCursorIntoView()
+  }
+
+  // Keep the highlighted row on screen when the cursor moves past the edges.
+  function scrollCursorIntoView() {
+    if (root.view !== "list") return
+    var index = root.selectedIndex
+    Qt.callLater(function() {
+      if (root.view !== "list" || root.selectedIndex !== index) return
+      if (index >= 1) notesListView.positionViewAtIndex(index - 1, ListView.Contain)
+      else notesListView.positionViewAtBeginning()
+    })
   }
 
   function handleActivate() {
@@ -306,6 +319,7 @@ Panel {
         bodyArea.cursorPosition = Math.min(root.savedBodyCursor, bodyArea.length)
       } else if (keyCatcher) {
         keyCatcher.forceActiveFocus()
+        root.scrollCursorIntoView()
       }
     })
   }
@@ -551,11 +565,6 @@ Panel {
             spacing: Style.space(8)
             boundsBehavior: Flickable.StopAtBounds
             interactive: contentHeight > height
-            currentIndex: root.selectedIndex - 1
-            onCurrentIndexChanged: {
-              if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
-              else positionViewAtBeginning()
-            }
             ScrollBar.vertical: ScrollBar {
               policy: ScrollBar.AsNeeded
               contentItem: Rectangle {

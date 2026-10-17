@@ -58,9 +58,18 @@ Panel {
     return null
   }
 
+  function noteHasTitle(note) {
+    return String((note && note.title) || "").trim() !== ""
+  }
+
+  // A note without a title shows the start of its body instead, so the list
+  // reads like the first line of the note.
   function noteTitleFor(note) {
     var t = String((note && note.title) || "").trim()
-    return t !== "" ? t : "Untitled"
+    if (t !== "") return t
+    var b = String((note && note.body) || "").replace(/\s+/g, " ").trim()
+    if (b === "") return "New note"
+    return b.length > 50 ? b.slice(0, 50) + "…" : b
   }
 
   function notePreviewFor(note) {
@@ -158,7 +167,12 @@ Panel {
     bodyArea.text = n ? n.body : ""
     root.suppressSave = false
     root.view = "edit"
-    Qt.callLater(function() { titleField.forceActiveFocus() })
+    // Start in the body, like Raycast: the title is optional and falls back
+    // to the first characters written here.
+    Qt.callLater(function() {
+      bodyArea.forceActiveFocus()
+      bodyArea.cursorPosition = bodyArea.length
+    })
   }
 
   function scheduleSave() {
@@ -563,7 +577,7 @@ Panel {
                   width: parent.width
                   text: root.notePreviewFor(noteRow.modelData)
                   textFormat: Text.PlainText
-                  visible: text !== ""
+                  visible: root.noteHasTitle(noteRow.modelData) && text !== ""
                   color: Qt.darker(root.barForeground, 1.5)
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.bodySmall

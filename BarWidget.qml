@@ -222,7 +222,9 @@ Panel {
     }
     root.editingId = ""
     root.view = "list"
+    root.clampListCursor()
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+    root.scrollCursorIntoView()
   }
 
   function requestDelete(id) {
@@ -245,8 +247,7 @@ Panel {
       root.editingId = ""
       root.view = "list"
     }
-    var count = root.sortedNotes.length
-    if (root.selectedIndex > count) root.selectedIndex = count
+    root.clampListCursor()
   }
 
   function handleMove(dx, dy) {
@@ -254,13 +255,24 @@ Panel {
     var count = root.sortedNotes.length
     if (!root.cursorActive) {
       root.cursorActive = true
-      if (root.selectedIndex < 0 || root.selectedIndex > count) root.selectedIndex = count > 0 ? 1 : 0
+      if (count === 0) root.selectedIndex = 0
+      else if (root.selectedIndex < 1 || root.selectedIndex > count) root.selectedIndex = 1
       root.scrollCursorIntoView()
       return
     }
+    // The + action button is mouse-only: the keyboard cursor stays on notes.
+    var minIndex = count > 0 ? 1 : 0
     var delta = dx !== 0 ? dx : dy
-    root.selectedIndex = Math.max(0, Math.min(count, root.selectedIndex + delta))
+    root.selectedIndex = Math.max(minIndex, Math.min(count, root.selectedIndex + delta))
     root.scrollCursorIntoView()
+  }
+
+  // Keep the cursor on an existing note. Only an empty list parks it on +.
+  function clampListCursor() {
+    var count = root.sortedNotes.length
+    if (count === 0) root.selectedIndex = 0
+    else if (root.selectedIndex < 1) root.selectedIndex = 1
+    else if (root.selectedIndex > count) root.selectedIndex = count
   }
 
   // Keep the highlighted row on screen when the cursor moves past the edges.
@@ -319,6 +331,7 @@ Panel {
         bodyArea.cursorPosition = Math.min(root.savedBodyCursor, bodyArea.length)
       } else if (keyCatcher) {
         keyCatcher.forceActiveFocus()
+        root.clampListCursor()
         root.scrollCursorIntoView()
       }
     })

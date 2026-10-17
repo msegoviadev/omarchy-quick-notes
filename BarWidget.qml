@@ -551,7 +551,19 @@ Panel {
             spacing: Style.space(8)
             boundsBehavior: Flickable.StopAtBounds
             interactive: contentHeight > height
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            currentIndex: root.selectedIndex - 1
+            onCurrentIndexChanged: {
+              if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+              else positionViewAtBeginning()
+            }
+            ScrollBar.vertical: ScrollBar {
+              policy: ScrollBar.AsNeeded
+              contentItem: Rectangle {
+                implicitWidth: Style.space(6)
+                radius: width / 2
+                color: Util.alpha(root.barForeground, 0.45)
+              }
+            }
 
             model: root.sortedNotes
 

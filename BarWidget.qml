@@ -19,9 +19,6 @@ Panel {
   property int selectedIndex: -1
   property bool cursorActive: false
 
-  property int editFocusIndex: 0
-  property bool editFieldActive: false
-
   property bool suppressSave: false
 
   // True once the on-disk notes have been read (or the file is confirmed
@@ -31,7 +28,6 @@ Panel {
   property bool notesLoaded: false
 
   // Restored when the panel reopens so the editor keeps its caret.
-  property int savedTitleCursor: 0
   property int savedBodyCursor: 0
 
   readonly property int maxNotes: 500
@@ -48,11 +44,6 @@ Panel {
     return arr
   }
 
-  readonly property bool editCursorOnBack: root.view === "edit" && root.cursorActive && !root.editFieldActive && root.editFocusIndex === 0
-  readonly property bool editCursorOnTitle: root.view === "edit" && root.cursorActive && !root.editFieldActive && root.editFocusIndex === 1
-  readonly property bool editCursorOnBody: root.view === "edit" && root.cursorActive && !root.editFieldActive && root.editFocusIndex === 2
-  readonly property bool editCursorOnDelete: root.view === "edit" && root.cursorActive && !root.editFieldActive && root.editFocusIndex === 3
-
   function makeId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   }
@@ -64,22 +55,26 @@ Panel {
     return null
   }
 
-  function noteHasTitle(note) {
-    return String((note && note.title) || "").trim() !== ""
-  }
-
-  // A note without a title shows the start of its body instead, so the list
-  // reads like the first line of the note.
+  // The first non-empty line of the body is the note title.
   function noteTitleFor(note) {
+    var lines = String((note && note.body) || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim()
+      if (line !== "") return line.length > 60 ? line.slice(0, 60) + "…" : line
+    }
     var t = String((note && note.title) || "").trim()
-    if (t !== "") return t
-    var b = String((note && note.body) || "").replace(/\s+/g, " ").trim()
-    if (b === "") return "New note"
-    return b.length > 50 ? b.slice(0, 50) + "…" : b
+    return t !== "" ? t : "New note"
   }
 
+  // Everything below the title line is the preview.
   function notePreviewFor(note) {
-    var b = String((note && note.body) || "").replace(/\s+/g, " ").trim()
+    var lines = String((note && note.body) || "").split("\n")
+    var first = -1
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim() !== "") { first = i; break }
+    }
+    if (first === -1) return ""
+    var b = lines.slice(first + 1).join(" ").replace(/\s+/g, " ").trim()
     return b.length > 72 ? b.slice(0, 72) + "…" : b
   }
 
@@ -159,6 +154,9 @@ Panel {
       return
     }
     Quickshell.execDetached(["mkdir", "-p", root.stateDir])
+    // Best-effort copy of the previous revision, so a bad write can never
+    // destroy the whole vault silently.
+    Quickshell.execDetached(["cp", "-f", root.notesPath, root.notesPath + ".bak"])
     notesFile.setText(payload)
   }
 
@@ -179,12 +177,10 @@ Panel {
     var n = root.findNote(id)
     root.suppressSave = true
     root.editingId = id
-    titleField.text = n ? n.title : ""
     bodyArea.text = n ? n.body : ""
     root.suppressSave = false
     root.view = "edit"
-    // Start in the body, like Raycast: the title is optional and falls back
-    // to the first characters written here.
+    // The editor is the body; the first line doubles as the title.
     Qt.callLater(function() {
       bodyArea.forceActiveFocus()
       bodyArea.cursorPosition = bodyArea.length
@@ -205,20 +201,13 @@ Panel {
     root.createNote()
   }
 
-  function handleEditorFieldEscape() {
-    if (root.confirmDeleteId !== "") { root.cancelDeleteConfirm(); return }
-    root.editFieldActive = false
-    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
-  }
-
   function commitEdit() {
     if (root.editingId === "") return
     var id = root.editingId
-    var title = titleField.text.slice(0, root.maxTitleLength)
     var body = bodyArea.text.slice(0, root.maxBodyLength)
     root.notes = root.notes.map(function(n) {
       if (n.id !== id) return n
-      return { id: n.id, title: title, body: body, updatedAt: Date.now() }
+      return { id: n.id, title: n.title, body: body, updatedAt: Date.now() }
     })
     root.persist()
   }
@@ -233,13 +222,13 @@ Panel {
     }
     root.editingId = ""
     root.view = "list"
-    root.editFieldActive = false
-    root.editFocusIndex = 0
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
   function requestDelete(id) {
     root.confirmDeleteId = id
+    // Always start on Delete, as asked, so Enter is a one-key confirm.
+    confirmDialog.selectedIndex = 1
   }
 
   function cancelDeleteConfirm() {
@@ -255,8 +244,6 @@ Panel {
     if (root.editingId === id) {
       root.editingId = ""
       root.view = "list"
-      root.editFieldActive = false
-      root.editFocusIndex = 0
     }
     var count = root.sortedNotes.length
     if (root.selectedIndex > count) root.selectedIndex = count
@@ -289,21 +276,6 @@ Panel {
     if (i >= 0 && i < list.length) root.requestDelete(list[i].id)
   }
 
-  function handleEditMove(dx, dy) {
-    if (root.confirmDeleteId !== "") return
-    if (!root.cursorActive) { root.cursorActive = true; return }
-    var delta = dx !== 0 ? dx : dy
-    root.editFocusIndex = Math.max(0, Math.min(3, root.editFocusIndex + delta))
-  }
-
-  function handleEditActivate() {
-    if (root.confirmDeleteId !== "" || !root.cursorActive) return
-    if (root.editFocusIndex === 0) { root.goBack(); return }
-    if (root.editFocusIndex === 1) { titleField.forceActiveFocus(); return }
-    if (root.editFocusIndex === 2) { bodyArea.forceActiveFocus(); return }
-    if (root.editFocusIndex === 3) { if (root.editingId !== "") root.requestDelete(root.editingId); return }
-  }
-
   function handlePanelClose() {
     if (root.confirmDeleteId !== "") { root.cancelDeleteConfirm(); return }
     if (root.view === "edit") { root.goBack(); return }
@@ -315,7 +287,6 @@ Panel {
   }
 
   function close() {
-    root.savedTitleCursor = titleField.cursorPosition
     root.savedBodyCursor = bodyArea.cursorPosition
     root.confirmDeleteId = ""
     root.controller.hide()
@@ -331,22 +302,12 @@ Panel {
     Qt.callLater(function() {
       if (!root.opened) return
       if (root.view === "edit" && root.editingId !== "" && root.findNote(root.editingId)) {
-        if (root.editFieldActive) root.restoreFieldFocus()
-        else if (keyCatcher) keyCatcher.forceActiveFocus()
+        bodyArea.forceActiveFocus()
+        bodyArea.cursorPosition = Math.min(root.savedBodyCursor, bodyArea.length)
       } else if (keyCatcher) {
         keyCatcher.forceActiveFocus()
       }
     })
-  }
-
-  function restoreFieldFocus() {
-    if (root.editFocusIndex === 2) {
-      bodyArea.forceActiveFocus()
-      bodyArea.cursorPosition = Math.min(root.savedBodyCursor, bodyArea.length)
-    } else {
-      titleField.forceActiveFocus()
-      titleField.cursorPosition = Math.min(root.savedTitleCursor, titleField.length)
-    }
   }
 
   Component.onCompleted: root.checkAndLoad("initial")
@@ -377,12 +338,18 @@ Panel {
   FileView {
     id: notesFile
     path: root.notesPath
-    preload: false
+    // preload must stay true: with preload false this FileView never reads the
+    // file on its own, and reload() from the stat check is a no-op until a
+    // load has happened, so the list started empty and the next save wiped
+    // the saved notes. loadNotesText() still enforces the size limit.
+    preload: true
     watchChanges: true
     atomicWrites: true
     printErrors: false
     onLoaded: root.loadNotesText(text())
-    onLoadFailed: root.loadNotesText("[]")
+    // Do not treat a failed read as an empty file: handleStatResult() decides
+    // that, and only when the file is genuinely absent.
+    onLoadFailed: console.warn("Quick Notes: notes.json could not be read")
     onFileChanged: root.checkAndLoad("changed")
   }
 
@@ -453,19 +420,34 @@ Panel {
       y: card.y + panel.padY
       width: card.width - panel.padX * 2
       height: card.height - panel.padY * 2
-      blocked: root.view === "edit" && root.editFieldActive
+      // In the editor every key belongs to the text body. The exception is the
+      // delete confirmation, which needs h/l and Enter routed to its buttons.
+      blocked: root.view === "edit" && root.confirmDeleteId === ""
 
       onMoveRequested: function(dx, dy) {
+        if (root.confirmDeleteId !== "") {
+          if (dx !== 0) confirmDialog.selectedIndex = confirmDialog.selectedIndex === 0 ? 1 : 0
+          return
+        }
         if (root.view === "list") root.handleMove(dx, dy)
-        else root.handleEditMove(dx, dy)
       }
       onActivateRequested: {
+        if (root.confirmDeleteId !== "") {
+          if (confirmDialog.selectedIndex === 0) root.cancelDeleteConfirm()
+          else root.performDelete()
+          return
+        }
         if (root.view === "list") root.handleActivate()
-        else root.handleEditActivate()
       }
       onCloseRequested: root.handlePanelClose()
       onDeleteRequested: if (root.view === "list") root.handleDeleteKey()
-      onTabRequested: function(direction) { if (root.view === "list") root.switchPanel(direction) }
+      onTabRequested: function(direction) {
+        if (root.confirmDeleteId !== "") {
+          confirmDialog.selectedIndex = confirmDialog.selectedIndex === 0 ? 1 : 0
+          return
+        }
+        if (root.view === "list") root.switchPanel(direction)
+      }
       onTextKey: function(t) {
         if (root.view !== "list" || root.confirmDeleteId !== "") return
         if (t === "n" || t === "N") root.createNote()
@@ -601,7 +583,7 @@ Panel {
                   width: parent.width
                   text: root.notePreviewFor(noteRow.modelData)
                   textFormat: Text.PlainText
-                  visible: root.noteHasTitle(noteRow.modelData) && text !== ""
+                  visible: text !== ""
                   color: Qt.darker(root.barForeground, 1.5)
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.bodySmall
@@ -662,9 +644,7 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               iconText: ""
               foreground: root.barForeground
-              hasCursor: root.editCursorOnBack
               onClicked: root.goBack()
-              onHovered: function(h) { if (h) { root.cursorActive = true; root.editFocusIndex = 0 } }
             }
 
             Text {
@@ -684,9 +664,7 @@ Panel {
               iconText: ""
               foreground: root.barForeground
               hoverColor: Color.urgent
-              hasCursor: root.editCursorOnDelete
               onClicked: if (root.editingId !== "") root.requestDelete(root.editingId)
-              onHovered: function(h) { if (h) { root.cursorActive = true; root.editFocusIndex = 3 } }
             }
 
             Text {
@@ -700,37 +678,13 @@ Panel {
             }
           }
 
-          TextField {
-            id: titleField
-            width: parent.width
-            placeholderText: "Title"
-            foreground: root.barForeground
-            font.pixelSize: Style.font.title
-            maximumLength: root.maxTitleLength
-            hasCursor: root.editCursorOnTitle
-
-            onTextChanged: if (!root.suppressSave) root.scheduleSave()
-            onActiveFocusChanged: if (activeFocus) {
-              root.editFieldActive = true
-              root.cursorActive = true
-              root.editFocusIndex = 1
-            }
-
-            Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Escape) {
-                root.handleEditorFieldEscape()
-                event.accepted = true
-              }
-            }
-          }
-
           BorderSurface {
             id: bodyBox
             width: parent.width
             height: Style.space(240)
             radius: Style.cornerRadius
-            color: root.editCursorOnBody ? Style.hoverFill : Style.normalFill
-            borderSpec: Border.controlSpec(root.editCursorOnBody ? "hover-cursor" : "normal", root.barForeground, Color.accent)
+            color: Style.normalFill
+            borderSpec: Border.controlSpec("normal", root.barForeground, Color.accent)
             padding: Style.spacing.controlPaddingX
 
             ScrollView {
@@ -742,7 +696,7 @@ Panel {
                 width: bodyBox.width - Style.spacing.controlPaddingX * 2
                 wrapMode: TextArea.Wrap
                 textFormat: TextEdit.PlainText
-                placeholderText: "Write your note…"
+                placeholderText: "First line becomes the title…"
                 color: root.barForeground
                 placeholderTextColor: Qt.darker(root.barForeground, 1.6)
                 selectionColor: Style.selectionFill
@@ -760,14 +714,12 @@ Panel {
                   if (!root.suppressSave) root.scheduleSave()
                 }
                 onActiveFocusChanged: if (activeFocus) {
-                  root.editFieldActive = true
                   root.cursorActive = true
-                  root.editFocusIndex = 2
                 }
 
                 Keys.onPressed: function(event) {
                   if (event.key === Qt.Key_Escape) {
-                    root.handleEditorFieldEscape()
+                    root.goBack()
                     event.accepted = true
                   }
                 }
@@ -778,6 +730,7 @@ Panel {
       }
 
       ConfirmDialog {
+        id: confirmDialog
         anchors.fill: parent
         z: 50
         opened: root.confirmDeleteId !== ""

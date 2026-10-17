@@ -345,16 +345,23 @@ Panel {
 
   // The confirmation dialog is a keyboard target of its own: take focus away
   // from the body while it is open, and give it back when it is dismissed.
+  // The restore runs deferred and re-checks the view, because confirming a
+  // delete can switch from the editor back to the list in the meantime.
   onConfirmDeleteIdChanged: {
     if (root.confirmDeleteId !== "") {
       Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
-    } else if (root.opened && root.view === "edit" && root.editingId !== "") {
-      Qt.callLater(function() {
-        if (!root.opened || root.confirmDeleteId !== "") return
+      return
+    }
+    Qt.callLater(function() {
+      if (!root.opened || root.confirmDeleteId !== "") return
+      if (root.view === "edit" && root.editingId !== "") {
         // The body keeps its own caret while unfocused, so no cursor restore.
         bodyArea.forceActiveFocus()
-      })
-    }
+      } else if (keyCatcher) {
+        keyCatcher.forceActiveFocus()
+        root.clampListCursor()
+      }
+    })
   }
 
   implicitWidth: button.implicitWidth

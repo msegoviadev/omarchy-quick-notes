@@ -24,6 +24,12 @@ Panel {
 
   property bool suppressSave: false
 
+  // True once the on-disk notes have been read (or the file is confirmed
+  // absent). Writes are refused until then: a plugin reload while the panel
+  // is open would otherwise persist an not-yet-loaded empty list and wipe
+  // every saved note.
+  property bool notesLoaded: false
+
   // Restored when the panel reopens so the editor keeps its caret.
   property int savedTitleCursor: 0
   property int savedBodyCursor: 0
@@ -88,8 +94,10 @@ Panel {
   }
 
   function loadNotesText(text) {
-    if (typeof text !== "string" || text.length > root.maxFileBytes) {
-      console.warn("Quick Notes: refusing to load notes.json - " + (text ? text.length : 0) + " bytes exceeds the " + root.maxFileBytes + " byte limit")
+    if (typeof text !== "string") { root.notes = []; return }
+    if (text.trim() === "") { root.notes = []; root.notesLoaded = true; return }
+    if (text.length > root.maxFileBytes) {
+      console.warn("Quick Notes: refusing to load notes.json - " + text.length + " bytes exceeds the " + root.maxFileBytes + " byte limit")
       root.notes = []
       return
     }
@@ -114,6 +122,7 @@ Panel {
     cleaned.sort(function(a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0) })
     if (cleaned.length > root.maxNotes) cleaned = cleaned.slice(0, root.maxNotes)
     root.notes = cleaned
+    root.notesLoaded = true
   }
 
   function checkAndLoad(reason) {
@@ -126,18 +135,24 @@ Panel {
   function handleStatResult(output, reason) {
     var size = parseInt(String(output).trim(), 10)
     if (!isFinite(size)) {
-      if (reason === "initial") root.notes = []
+      // A missing file only means "no notes" on the very first read. During a
+      // normal run the path is briefly absent while an atomic write renames
+      // into place, so never treat that as an empty vault.
+      if (reason === "initial") { root.notes = []; root.notesLoaded = true }
       return
     }
     if (size > root.maxFileBytes) {
       console.warn("Quick Notes: notes.json is " + size + " bytes, exceeds the " + root.maxFileBytes + " byte limit; refusing to load it.")
-      if (reason === "initial") root.notes = []
       return
     }
     notesFile.reload()
   }
 
   function persist() {
+    if (!root.notesLoaded) {
+      console.warn("Quick Notes: refusing to write notes.json before it has been read")
+      return
+    }
     var payload = JSON.stringify(root.notes, null, 2)
     if (payload.length > root.maxFileBytes) {
       console.warn("Quick Notes: refusing to write notes.json - serialized size exceeds the " + root.maxFileBytes + " byte limit")
@@ -152,6 +167,7 @@ Panel {
   }
 
   function createNote() {
+    if (!root.notesLoaded) return
     if (root.confirmDeleteId !== "" || root.notes.length >= root.maxNotes) return
     var note = { id: root.makeId(), title: "", body: "", updatedAt: Date.now() }
     root.notes = root.notes.concat([note])
@@ -375,7 +391,7 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: ""
-    tooltipText: "Notes"
+    tooltipText: "Notes (Super+Alt+N)"
     onPressed: function(b) {
       if (b === Qt.LeftButton) root.toggle()
     }
@@ -507,12 +523,21 @@ Panel {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               iconText: ""
-              tooltipText: root.notes.length < root.maxNotes ? "New note (n)" : "Note limit reached (" + root.maxNotes + ")"
               foreground: root.barForeground
               enabled: root.notes.length < root.maxNotes
               hasCursor: root.cursorActive && root.selectedIndex === 0
               onClicked: root.createNote()
               onHovered: function(h) { if (h) { root.cursorActive = true; root.selectedIndex = 0 } }
+            }
+
+            Text {
+              text: "n"
+              color: Qt.darker(root.barForeground, 1.6)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              anchors.right: addButton.left
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: addButton.verticalCenter
             }
           }
 
@@ -548,7 +573,6 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
                 onEntered: { root.cursorActive = true; root.selectedIndex = noteRow.index + 1 }
                 onClicked: root.openNote(noteRow.modelData.id)
               }
@@ -557,7 +581,7 @@ Panel {
                 id: rowContent
                 anchors.left: parent.left
                 anchors.leftMargin: Style.space(10)
-                anchors.right: deleteRowButton.left
+                anchors.right: deleteRowHint.left
                 anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(2)
@@ -591,10 +615,21 @@ Panel {
                 anchors.rightMargin: Style.space(6)
                 anchors.verticalCenter: parent.verticalCenter
                 iconText: ""
-                tooltipText: "Delete note (x)"
                 foreground: root.barForeground
                 hoverColor: Color.urgent
                 onClicked: root.requestDelete(noteRow.modelData.id)
+              }
+
+              Text {
+                id: deleteRowHint
+                text: "x"
+                opacity: noteRow.hasCursor ? 1 : 0
+                color: Qt.darker(root.barForeground, 1.6)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                anchors.right: deleteRowButton.left
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: deleteRowButton.verticalCenter
               }
             }
           }
@@ -602,7 +637,7 @@ Panel {
           Text {
             visible: root.sortedNotes.length === 0
             width: parent.width
-            text: "No notes yet. Tap + to create one."
+            text: "No notes yet. Press n to create one."
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
             color: Qt.darker(root.barForeground, 1.5)
@@ -626,11 +661,20 @@ Panel {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               iconText: ""
-              tooltipText: "Back to notes (Esc)"
               foreground: root.barForeground
               hasCursor: root.editCursorOnBack
               onClicked: root.goBack()
               onHovered: function(h) { if (h) { root.cursorActive = true; root.editFocusIndex = 0 } }
+            }
+
+            Text {
+              text: "Esc"
+              color: Qt.darker(root.barForeground, 1.6)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              anchors.left: backButton.right
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: backButton.verticalCenter
             }
 
             PanelActionButton {
@@ -638,12 +682,21 @@ Panel {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               iconText: ""
-              tooltipText: "Delete note (Ctrl+Backspace)"
               foreground: root.barForeground
               hoverColor: Color.urgent
               hasCursor: root.editCursorOnDelete
               onClicked: if (root.editingId !== "") root.requestDelete(root.editingId)
               onHovered: function(h) { if (h) { root.cursorActive = true; root.editFocusIndex = 3 } }
+            }
+
+            Text {
+              text: "Ctrl+Backspace"
+              color: Qt.darker(root.barForeground, 1.6)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              anchors.right: editDeleteButton.left
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: editDeleteButton.verticalCenter
             }
           }
 

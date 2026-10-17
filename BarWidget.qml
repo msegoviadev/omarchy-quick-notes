@@ -316,6 +316,20 @@ Panel {
     if (root.opened) root.restoreSession()
   }
 
+  // The confirmation dialog is a keyboard target of its own: take focus away
+  // from the body while it is open, and give it back when it is dismissed.
+  onConfirmDeleteIdChanged: {
+    if (root.confirmDeleteId !== "") {
+      Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+    } else if (root.opened && root.view === "edit" && root.editingId !== "") {
+      Qt.callLater(function() {
+        if (!root.opened || root.confirmDeleteId !== "") return
+        // The body keeps its own caret while unfocused, so no cursor restore.
+        bodyArea.forceActiveFocus()
+      })
+    }
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 

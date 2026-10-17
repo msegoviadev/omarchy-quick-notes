@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -22,6 +23,10 @@ Panel {
   property bool editFieldActive: false
 
   property bool suppressSave: false
+
+  // Restored when the panel reopens so the editor keeps its caret.
+  property int savedTitleCursor: 0
+  property int savedBodyCursor: 0
 
   readonly property int maxNotes: 500
   readonly property int maxTitleLength: 200
@@ -280,7 +285,8 @@ Panel {
   }
 
   function close() {
-    if (root.editingId !== "") root.goBack()
+    root.savedTitleCursor = titleField.cursorPosition
+    root.savedBodyCursor = bodyArea.cursorPosition
     root.confirmDeleteId = ""
     root.controller.hide()
   }
@@ -289,18 +295,34 @@ Panel {
     root.opened ? root.close() : root.open()
   }
 
+  // Reopening keeps whatever the panel showed last: the same note, the same
+  // editor/list view, and the same caret position.
+  function restoreSession() {
+    Qt.callLater(function() {
+      if (!root.opened) return
+      if (root.view === "edit" && root.editingId !== "" && root.findNote(root.editingId)) {
+        if (root.editFieldActive) root.restoreFieldFocus()
+        else if (keyCatcher) keyCatcher.forceActiveFocus()
+      } else if (keyCatcher) {
+        keyCatcher.forceActiveFocus()
+      }
+    })
+  }
+
+  function restoreFieldFocus() {
+    if (root.editFocusIndex === 2) {
+      bodyArea.forceActiveFocus()
+      bodyArea.cursorPosition = Math.min(root.savedBodyCursor, bodyArea.length)
+    } else {
+      titleField.forceActiveFocus()
+      titleField.cursorPosition = Math.min(root.savedTitleCursor, titleField.length)
+    }
+  }
+
   Component.onCompleted: root.checkAndLoad("initial")
 
   onOpenedChanged: {
-    if (root.opened) {
-      root.view = "list"
-      root.editingId = ""
-      root.confirmDeleteId = ""
-      root.cursorActive = false
-      root.editFieldActive = false
-      root.editFocusIndex = 0
-      root.selectedIndex = root.sortedNotes.length > 0 ? 1 : 0
-    }
+    if (root.opened) root.restoreSession()
   }
 
   implicitWidth: button.implicitWidth
@@ -345,19 +367,62 @@ Panel {
     }
   }
 
-  KeyboardPanel {
+  // Centered overlay instead of a bar-anchored popup: a fullscreen
+  // transparent layer-shell surface with the card pinned to the middle of
+  // the screen.
+  PanelWindow {
     id: panel
-    anchorItem: button
-    owner: root
-    bar: root.bar
-    open: root.opened
-    focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(mainColumn.implicitHeight, Style.space(460))
+    visible: root.opened
+    anchors {
+      top: true
+      bottom: true
+      left: true
+      right: true
+    }
+    color: "transparent"
+    WlrLayershell.namespace: "quick-notes"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    exclusionMode: ExclusionMode.Ignore
+
+    readonly property real padX: Style.spacing.popupPadding
+    readonly property real padY: Style.spacing.popupPadding
+    readonly property real sideMargin: Style.gapsOut
+    readonly property real availableWidth: Math.max(Style.space(220), width - sideMargin * 2)
+    readonly property real availableHeight: Math.max(Style.space(220), height - sideMargin * 2)
+    readonly property real cardWidth: Math.min(Style.space(420), availableWidth)
+
+    MouseArea {
+      anchors.fill: parent
+      acceptedButtons: Qt.AllButtons
+      onClicked: root.close()
+    }
+
+    Rectangle {
+      id: card
+      // Horizontally centered, one third of the way down the screen
+      // (Raycast-style), clamped so it always stays fully on screen.
+      x: Math.round(Math.max(panel.sideMargin, Math.min((panel.width - width) / 2, panel.width - width - panel.sideMargin)))
+      y: Math.round(Math.max(panel.sideMargin, Math.min(panel.height / 3 - height / 2, panel.height - height - panel.sideMargin)))
+      width: panel.cardWidth
+      height: Math.min(mainColumn.implicitHeight + panel.padY * 2, panel.availableHeight)
+      color: Color.popups.background
+      radius: Style.cornerRadius
+      border.color: Color.popups.border
+      border.width: Math.max(1, Style.space(2))
+
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.AllButtons
+      }
+    }
 
     PanelKeyCatcher {
       id: keyCatcher
-      anchors.fill: parent
+      x: card.x + panel.padX
+      y: card.y + panel.padY
+      width: card.width - panel.padX * 2
+      height: card.height - panel.padY * 2
       blocked: root.view === "edit" && root.editFieldActive
 
       onMoveRequested: function(dx, dy) {

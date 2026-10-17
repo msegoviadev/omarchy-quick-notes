@@ -509,12 +509,6 @@ Panel {
         }
       }
 
-      Shortcut {
-        sequence: "Ctrl+Backspace"
-        enabled: root.opened && root.view === "edit"
-        onActivated: if (root.editingId !== "") root.requestDelete(root.editingId)
-      }
-
       Column {
         id: mainColumn
         anchors.left: parent.left
@@ -716,7 +710,7 @@ Panel {
             }
 
             Text {
-              text: "Ctrl+Backspace"
+              text: "Ctrl+X"
               color: Qt.darker(root.barForeground, 1.6)
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.bodySmall
@@ -765,9 +759,17 @@ Panel {
                   root.cursorActive = true
                 }
 
+                Keys.priority: Keys.BeforeItem
                 Keys.onPressed: function(event) {
                   if (event.key === Qt.Key_Escape) {
                     root.goBack()
+                    event.accepted = true
+                    return
+                  }
+                  // Ctrl+X deletes the note, taking precedence over the text
+                  // editor's cut.
+                  if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_X) {
+                    if (root.editingId !== "") root.requestDelete(root.editingId)
                     event.accepted = true
                   }
                 }
